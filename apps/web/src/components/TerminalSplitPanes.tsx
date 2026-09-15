@@ -1,6 +1,5 @@
 import {
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -8,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useResizeDrag } from "~/hooks/useResizeDrag";
 import {
   constrainPaneSizes,
   equalPaneSizes,
@@ -30,19 +30,6 @@ interface TerminalSplitPanesProps {
   renderTerminal: (terminalId: string) => ReactNode;
 }
 
-interface PointerState {
-  pointerId: number;
-  handleIndex: number;
-  target: HTMLDivElement;
-  direction: TerminalSplitDirection;
-  startClientX: number;
-  startClientY: number;
-  pendingClientX: number;
-  pendingClientY: number;
-  startSizes: number[];
-  containerPx: number;
-}
-
 function sizesDiffer(left: readonly number[], right: readonly number[]) {
   return left.some((size, index) => size !== right[index]);
 }
@@ -63,8 +50,7 @@ export function TerminalSplitPanes({
   const renderedContainerPxRef = useRef(0);
   const [containerPx, setContainerPx] = useState(0);
   const latestSizesRef = useRef<number[]>([]);
-  const pointerStateRef = useRef<PointerState | null>(null);
-  const pendingRafRef = useRef<number | null>(null);
+  const draggingRef = useRef(false);
   const handleStateRef = useRef<Array<HTMLDivElement | null>>([]);
   const callbacksRef = useRef({ onSizesChange, onResizeEnd });
   useLayoutEffect(() => {
@@ -73,7 +59,6 @@ export function TerminalSplitPanes({
 
   const resolved = resolvePaneSizes(sizes, terminalIds.length);
   const resolvedRef = useRef(resolved);
-  resolvedRef.current = resolved;
   const displayed = constrainPaneSizes(resolved, containerPx, MIN_TERMINAL_PANE_PX[direction]);
 
   useEffect(() => {
@@ -98,12 +83,10 @@ export function TerminalSplitPanes({
 
   const writeSizesToDom = useCallback(
     (nextSizes: readonly number[]) => {
-      const pointerState = pointerStateRef.current;
-      const activeDirection = pointerState?.direction ?? direction;
       const container = containerRef.current;
       if (!container) return;
       const template = paneGridTemplate(nextSizes);
-      const horizontal = activeDirection === "horizontal";
+      const horizontal = direction === "horizontal";
       container.style.gridTemplateColumns = horizontal ? template : "";
       container.style.gridTemplateRows = horizontal ? "" : template;
       for (const [index, offset] of paneBoundaryOffsets(nextSizes).entries()) {
@@ -117,129 +100,63 @@ export function TerminalSplitPanes({
     [direction],
   );
 
-  const flushPending = useCallback(() => {
-    if (pendingRafRef.current !== null) {
-      cancelAnimationFrame(pendingRafRef.current);
-      pendingRafRef.current = null;
-    }
-    const state = pointerStateRef.current;
-    if (!state) return;
-    const position = state.direction === "horizontal" ? state.pendingClientX : state.pendingClientY;
-    const start = state.direction === "horizontal" ? state.startClientX : state.startClientY;
-    const nextSizes = resizeAdjacentPanes({
-      sizes: state.startSizes,
-      handleIndex: state.handleIndex,
-      deltaPx: position - start,
-      containerPx: state.containerPx,
-      minPanePx: MIN_TERMINAL_PANE_PX[state.direction],
-    });
-    writeSizesToDom(nextSizes);
-    latestSizesRef.current = nextSizes;
-  }, [writeSizesToDom]);
+  const resizeHandlers = useResizeDrag<HTMLDivElement>(
+    (event) => {
+      const dragContainerPx = containerPxRef.current;
+      if (dragContainerPx <= 0) return null;
+      // React clears currentTarget after dispatch; cleanup runs at drag end.
+      const handle = event.currentTarget;
+      const handleIndex = Number(handle.dataset.handleIndex);
+      const startSizes = displayed;
+      const boundaryStartPx = paneBoundaryOffsets(startSizes)[handleIndex]! * dragContainerPx;
+      draggingRef.current = true;
+      latestSizesRef.current = startSizes;
+      handle.dataset.dragging = "true";
 
-  const finishDrag = useCallback(() => {
-    const state = pointerStateRef.current;
-    if (!state) return;
-    flushPending();
-    pointerStateRef.current = null;
-    try {
-      if (state.target.hasPointerCapture(state.pointerId)) {
-        state.target.releasePointerCapture(state.pointerId);
-      }
-    } catch {
-      // Capture may already have been released by the browser.
-    }
-    state.target.removeAttribute("data-dragging");
-    document.body.style.removeProperty("cursor");
-    document.body.style.removeProperty("user-select");
-
-    const distance = Math.hypot(
-      state.pendingClientX - state.startClientX,
-      state.pendingClientY - state.startClientY,
-    );
-    const changed = sizesDiffer(state.startSizes, latestSizesRef.current);
-    if (changed && distance > 2) {
-      callbacksRef.current.onSizesChange(latestSizesRef.current);
-      callbacksRef.current.onResizeEnd();
-    } else {
-      latestSizesRef.current = state.startSizes;
-      writeSizesToDom(state.startSizes);
-    }
-  }, [flushPending, writeSizesToDom]);
+      return {
+        width: boundaryStartPx,
+        axis: direction === "horizontal" ? "x" : "y",
+        edge: "right",
+        resize(value) {
+          const next = resizeAdjacentPanes({
+            sizes: startSizes,
+            handleIndex,
+            deltaPx: value - boundaryStartPx,
+            containerPx: dragContainerPx,
+            minPanePx: MIN_TERMINAL_PANE_PX[direction],
+          });
+          writeSizesToDom(next);
+          latestSizesRef.current = next;
+          return paneBoundaryOffsets(next)[handleIndex]! * dragContainerPx;
+        },
+        finish(_value, moved) {
+          const changed = sizesDiffer(startSizes, latestSizesRef.current);
+          if (moved && changed) {
+            callbacksRef.current.onSizesChange(latestSizesRef.current);
+            callbacksRef.current.onResizeEnd();
+          } else {
+            latestSizesRef.current = startSizes;
+            writeSizesToDom(startSizes);
+          }
+        },
+        cleanup() {
+          draggingRef.current = false;
+          handle.removeAttribute("data-dragging");
+        },
+      };
+    },
+    `${direction}:${terminalIds.join(",")}`,
+  );
 
   useLayoutEffect(() => {
-    const displayedSizes = pointerStateRef.current ? latestSizesRef.current : displayed;
+    resolvedRef.current = resolved;
+    const displayedSizes = draggingRef.current ? latestSizesRef.current : displayed;
     latestSizesRef.current = displayedSizes;
     writeSizesToDom(displayedSizes);
   });
 
-  useEffect(() => {
-    const onPointerMove = (event: PointerEvent) => {
-      const state = pointerStateRef.current;
-      if (!state || state.pointerId !== event.pointerId) return;
-      event.preventDefault();
-      state.pendingClientX = event.clientX;
-      state.pendingClientY = event.clientY;
-      if (pendingRafRef.current !== null) return;
-      pendingRafRef.current = requestAnimationFrame(() => {
-        pendingRafRef.current = null;
-        flushPending();
-      });
-    };
-    const onPointerEnd = (event: PointerEvent) => {
-      const state = pointerStateRef.current;
-      if (!state || state.pointerId !== event.pointerId) return;
-      if (event.type === "pointerup") {
-        state.pendingClientX = event.clientX;
-        state.pendingClientY = event.clientY;
-      }
-      finishDrag();
-    };
-    window.addEventListener("pointermove", onPointerMove, { passive: false });
-    window.addEventListener("pointerup", onPointerEnd);
-    window.addEventListener("pointercancel", onPointerEnd);
-    window.addEventListener("blur", finishDrag);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerEnd);
-      window.removeEventListener("pointercancel", onPointerEnd);
-      window.removeEventListener("blur", finishDrag);
-      finishDrag();
-      if (pendingRafRef.current !== null) cancelAnimationFrame(pendingRafRef.current);
-    };
-  }, [finishDrag, flushPending]);
-
-  const startDrag = (event: ReactPointerEvent<HTMLDivElement>, handleIndex: number) => {
-    if (event.button !== 0 || pointerStateRef.current) return;
-    const dragContainerPx = containerPxRef.current;
-    if (dragContainerPx <= 0) return;
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    pointerStateRef.current = {
-      pointerId: event.pointerId,
-      handleIndex,
-      target: event.currentTarget,
-      direction,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      pendingClientX: event.clientX,
-      pendingClientY: event.clientY,
-      startSizes: displayed,
-      containerPx: dragContainerPx,
-    };
-    latestSizesRef.current = displayed;
-    event.currentTarget.dataset.dragging = "true";
-    document.body.style.cursor = direction === "horizontal" ? "col-resize" : "row-resize";
-    document.body.style.userSelect = "none";
-  };
-
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>, handleIndex: number) => {
-    if (pointerStateRef.current) return;
+    if (draggingRef.current) return;
 
     if (event.key === "Enter") {
       event.preventDefault();
@@ -326,11 +243,9 @@ export function TerminalSplitPanes({
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(offset * 100)}
-          onPointerDown={(event) => startDrag(event, handleIndex)}
+          data-handle-index={handleIndex}
+          {...resizeHandlers}
           onKeyDown={(event) => handleKeyDown(event, handleIndex)}
-          onLostPointerCapture={(event) => {
-            if (pointerStateRef.current?.pointerId === event.pointerId) finishDrag();
-          }}
           onDoubleClick={() => {
             callbacksRef.current.onSizesChange(equalPaneSizes(terminalIds.length));
             callbacksRef.current.onResizeEnd();
