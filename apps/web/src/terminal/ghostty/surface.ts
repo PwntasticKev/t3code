@@ -621,6 +621,7 @@ export class GhosttyTerminalSurface {
   private composing = false;
   private focused = false;
   private resizeNotified = false;
+  private reflowDeferred = false;
   private canvasConfigured = false;
   private theme: GhosttyTheme;
   private readonly suppressedKeyCodes = new Set<string>();
@@ -890,11 +891,16 @@ export class GhosttyTerminalSurface {
     this.mountHeight = height;
     // onResize is the only PTY resize channel, so the first successful fit must
     // notify even when the measured grid equals the 1x1 construction sentinel.
+    // During split-pane drag, defer grid reflow to avoid wrapped text jumping every frame.
+    // Keep canvas-sized repaint; reflow happens once when drag ends via setReflowDeferred(false).
     if (grid.cols !== this.cols || grid.rows !== this.rows || !this.resizeNotified) {
-      this.cols = grid.cols;
-      this.rows = grid.rows;
-      this.core.resize(grid.cols, grid.rows, this.metrics.width, this.metrics.height);
-      this.notifyResize();
+      const shouldSkipReflow = this.reflowDeferred && this.resizeNotified;
+      if (!shouldSkipReflow) {
+        this.cols = grid.cols;
+        this.rows = grid.rows;
+        this.core.resize(grid.cols, grid.rows, this.metrics.width, this.metrics.height);
+        this.notifyResize();
+      }
       this.forceFullRender = true;
       this.scrollbarDirty = true;
       shouldRender = true;
@@ -904,6 +910,20 @@ export class GhosttyTerminalSurface {
     // composites the old backing store stretched into the new element box.
     if (shouldRender || this.forceFullRender) this.renderFrame();
     return true;
+  }
+
+  /**
+   * Defer grid reflow during split-pane drag. Canvas repaints every frame, but grid
+   * stays fixed until setReflowDeferred(false) reflows to the settled size. Prevents
+   * wrapped text from jumping ~60×/s as the boundary moves during user interaction.
+   */
+  setReflowDeferred(deferred: boolean): void {
+    if (this.disposed || deferred === this.reflowDeferred) return;
+    this.reflowDeferred = deferred;
+    if (!deferred) {
+      // Reflow to settled size now that drag has ended
+      this.fit();
+    }
   }
 
   /**

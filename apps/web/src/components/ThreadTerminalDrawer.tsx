@@ -325,6 +325,7 @@ interface TerminalViewportProps {
   resizeEpoch: number;
   drawerHeight: number;
   keybindings: ResolvedKeybindingsConfig;
+  reflowDeferred?: boolean;
 }
 
 interface TerminalLaunchLocation {
@@ -351,6 +352,7 @@ export function TerminalViewport({
   resizeEpoch,
   drawerHeight,
   keybindings,
+  reflowDeferred = false,
 }: TerminalViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<GhosttyTerminalSurface | null>(null);
@@ -466,6 +468,13 @@ export function TerminalViewport({
     keybindingsRef.current = keybindings;
   }, [keybindings]);
 
+  // A surface that finishes loading mid-drag reads the latest value from the ref.
+  const reflowDeferredRef = useRef(reflowDeferred);
+  useLayoutEffect(() => {
+    reflowDeferredRef.current = reflowDeferred;
+    terminalRef.current?.setReflowDeferred(reflowDeferred);
+  }, [reflowDeferred]);
+
   useLayoutEffect(() => {
     visibleRef.current = visible;
     terminalRef.current?.setVisible(visible);
@@ -515,6 +524,7 @@ export function TerminalViewport({
         return null;
       }
       terminal.setVisible(visibleRef.current);
+      terminal.setReflowDeferred(reflowDeferredRef.current);
       // The theme observer is not installed yet, so re-read the theme in case
       // the app toggled light/dark while the WASM surface was loading.
       terminal.setTheme(terminalThemeFromApp(mount));
@@ -1514,7 +1524,7 @@ export default function ThreadTerminalDrawer({
                 }}
                 onPaneActivate={onActiveTerminalChange}
                 onResizeEnd={() => setResizeEpoch((value) => value + 1)}
-                renderTerminal={(terminalId) => {
+                renderTerminal={(terminalId, reflowDeferred) => {
                   const terminalLaunchLocation = resolveTerminalLaunchLocation(terminalId);
                   return (
                     <TerminalViewport
@@ -1538,6 +1548,7 @@ export default function ThreadTerminalDrawer({
                       resizeEpoch={resizeEpoch}
                       drawerHeight={drawerHeight}
                       keybindings={keybindings}
+                      reflowDeferred={reflowDeferred}
                     />
                   );
                 }}

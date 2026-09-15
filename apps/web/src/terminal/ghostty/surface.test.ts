@@ -145,14 +145,17 @@ describe("GhosttyTerminalSurface visibility", () => {
       },
     );
     const snapshot = vi.spyOn(GhosttyTerminalCore.prototype, "snapshot");
+    const coreResize = vi.spyOn(GhosttyTerminalCore.prototype, "resize");
     const onData = vi.fn<(data: string) => void>();
 
     return {
       mount,
+      canvas,
       frames,
       paint,
       requestFrame,
       snapshot,
+      coreResize,
       onData,
       get renderedSnapshot() {
         const result = snapshot.mock.results.at(-1);
@@ -406,6 +409,67 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(harness.snapshot).toHaveBeenCalledTimes(1);
     expect(harness.renderedSnapshot.rowData[0]?.text).toContain("visible!xxxxxxxx");
     expect(harness.paint).toHaveBeenCalled();
+  });
+
+  it("repaints a resized canvas without changing the grid while reflow is deferred", async () => {
+    const harness = createHarness();
+    const onResize = vi.fn();
+    const surface = await harness.create({ onResize });
+    vi.advanceTimersByTime(150);
+    onResize.mockClear();
+    const initialCols = harness.renderedSnapshot.cols;
+    harness.snapshot.mockClear();
+    harness.paint.mockClear();
+
+    surface.setReflowDeferred(true);
+    harness.mount.clientWidth = 88;
+    harness.resize();
+    vi.advanceTimersByTime(150);
+
+    expect(harness.canvas.width).toBe(88);
+    expect(harness.snapshot).toHaveBeenCalledOnce();
+    expect(harness.paint).toHaveBeenCalled();
+    expect(harness.renderedSnapshot.cols).toBe(initialCols);
+    expect(onResize).not.toHaveBeenCalled();
+  });
+
+  it("reflows once to the settled size when deferred reflow ends", async () => {
+    const harness = createHarness();
+    const onResize = vi.fn();
+    const surface = await harness.create({ onResize });
+    vi.advanceTimersByTime(150);
+    onResize.mockClear();
+    harness.coreResize.mockClear();
+
+    surface.setReflowDeferred(true);
+    harness.mount.clientWidth = 88;
+    harness.resize();
+    harness.mount.clientWidth = 104;
+    harness.resize();
+    surface.setReflowDeferred(false);
+
+    expect(harness.coreResize).toHaveBeenCalledOnce();
+    expect(harness.renderedSnapshot.cols).toBe(12);
+    expect(onResize).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(150);
+    expect(onResize).toHaveBeenCalledOnce();
+    expect(onResize).toHaveBeenCalledWith(12, 6);
+  });
+
+  it("establishes the first visible grid when reflow is already deferred", async () => {
+    const harness = createHarness();
+    const onResize = vi.fn();
+    const surface = await harness.create({ visible: false, onResize });
+    harness.coreResize.mockClear();
+
+    surface.setReflowDeferred(true);
+    surface.setVisible(true);
+
+    expect(harness.coreResize).toHaveBeenCalledOnce();
+    expect(harness.renderedSnapshot).toMatchObject({ cols: 20, rows: 6 });
+    vi.advanceTimersByTime(150);
+    expect(onResize).toHaveBeenCalledOnce();
+    expect(onResize).toHaveBeenCalledWith(20, 6);
   });
 
   it.each([false, true])(
