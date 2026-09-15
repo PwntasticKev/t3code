@@ -29,7 +29,7 @@ interface TerminalSplitPanesProps {
   onSizesChange: (sizes: number[]) => void;
   onPaneActivate: (terminalId: string) => void;
   onResizeEnd: () => void;
-  renderTerminal: (terminalId: string, reflowDeferred: boolean) => ReactNode;
+  renderTerminal: (terminalId: string) => ReactNode;
 }
 
 function sizesDiffer(left: readonly number[], right: readonly number[]) {
@@ -53,7 +53,6 @@ export function TerminalSplitPanes({
   const [containerPx, setContainerPx] = useState(0);
   const latestSizesRef = useRef<number[]>([]);
   const draggingRef = useRef(false);
-  const [reflowDeferred, setReflowDeferred] = useState(false);
   const handleStateRef = useRef<Array<HTMLDivElement | null>>([]);
   const callbacksRef = useRef({ onSizesChange, onResizeEnd });
   useLayoutEffect(() => {
@@ -124,7 +123,6 @@ export function TerminalSplitPanes({
       const startSizes = displayed;
       const boundaryStartPx = paneBoundaryOffsets(startSizes)[handleIndex]! * dragContainerPx;
       draggingRef.current = true;
-      setReflowDeferred(true);
       latestSizesRef.current = startSizes;
       handle.dataset.dragging = "true";
 
@@ -157,7 +155,6 @@ export function TerminalSplitPanes({
         },
         cleanup() {
           draggingRef.current = false;
-          setReflowDeferred(false);
           handle.removeAttribute("data-dragging");
         },
       };
@@ -238,7 +235,7 @@ export function TerminalSplitPanes({
             if (terminalId !== activeTerminalId) onPaneActivate(terminalId);
           }}
         >
-          <div className="h-full">{renderTerminal(terminalId, reflowDeferred)}</div>
+          <div className="h-full">{renderTerminal(terminalId)}</div>
         </div>
       ))}
       {offsets.map((offset: number, handleIndex: number) => (
