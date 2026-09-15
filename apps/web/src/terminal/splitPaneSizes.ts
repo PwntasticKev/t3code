@@ -32,6 +32,31 @@ export function resolvePaneSizes(sizes: readonly number[] | undefined, count: nu
   return Array.from(sizes, (size) => size / sum);
 }
 
+/** Raises undersized panes to the minimum fraction while preserving a total size of 1. */
+export function constrainPaneSizes(
+  sizes: readonly number[],
+  containerPx: number,
+  minPanePx: number,
+): number[] {
+  if (containerPx <= 0 || sizes.length <= 1) return Array.from(sizes);
+
+  const minFraction = minPanePx / containerPx;
+  if (sizes.length * minFraction >= 1) return equalPaneSizes(sizes.length);
+  if (sizes.every((size) => size >= minFraction)) return Array.from(sizes);
+
+  const totalExcess = sizes.reduce((total, size) => total + Math.max(0, size - minFraction), 0);
+  const availableExcess = 1 - sizes.length * minFraction;
+  const result = sizes.map((size) =>
+    size <= minFraction
+      ? minFraction
+      : minFraction + ((size - minFraction) / totalExcess) * availableExcess,
+  );
+  const correction = 1 - result.reduce((total, size) => total + size, 0);
+  const correctionIndex = result.findIndex((size) => size > minFraction);
+  result[correctionIndex] = (result[correctionIndex] ?? 0) + correction;
+  return result;
+}
+
 /**
  * Moves the boundary between pane `handleIndex` and pane `handleIndex + 1` by `deltaPx`
  * (positive = towards the end, i.e. pane handleIndex grows). Only those two panes change;

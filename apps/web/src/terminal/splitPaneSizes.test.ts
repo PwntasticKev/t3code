@@ -1,12 +1,59 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  constrainPaneSizes,
   equalPaneSizes,
   paneBoundaryOffsets,
   paneGridTemplate,
   resizeAdjacentPanes,
   resolvePaneSizes,
 } from "./splitPaneSizes";
+
+describe("constrainPaneSizes", () => {
+  it("returns unchanged when all panes fit at minimum", () => {
+    const sizes = [0.25, 0.75];
+    const result = constrainPaneSizes(sizes, 1000, 160);
+    expect(result).toEqual(sizes);
+    expect(result).not.toBe(sizes);
+  });
+
+  it("raises a below-min pane and takes the deficit proportionally", () => {
+    const result = constrainPaneSizes([0.1, 0.3, 0.6], 1000, 200);
+    expect(result[0]!).toBeCloseTo(0.2, 5);
+    expect(result[1]!).toBeCloseTo(0.28, 5);
+    expect(result[2]!).toBeCloseTo(0.52, 5);
+  });
+
+  it("sums to exactly 1", () => {
+    const result = constrainPaneSizes([0.05, 0.25, 0.7], 1000, 200);
+    expect(result.reduce((total, size) => total + size, 0)).toBe(1);
+  });
+
+  it("falls back to equal sizes when the container cannot fit every minimum", () => {
+    expect(constrainPaneSizes([0.1, 0.2, 0.7], 400, 160)).toEqual(equalPaneSizes(3));
+  });
+
+  it("returns a copy unchanged when containerPx <= 0", () => {
+    const sizes = [0.25, 0.75];
+    const result = constrainPaneSizes(sizes, 0, 160);
+    expect(result).toEqual(sizes);
+    expect(result).not.toBe(sizes);
+  });
+
+  it("returns a copy unchanged for a single pane", () => {
+    const sizes = [1];
+    const result = constrainPaneSizes(sizes, 100, 160);
+    expect(result).toEqual(sizes);
+    expect(result).not.toBe(sizes);
+  });
+
+  it("never mutates the input", () => {
+    const sizes = [0.1, 0.3, 0.6];
+    const copy = [...sizes];
+    constrainPaneSizes(sizes, 1000, 200);
+    expect(sizes).toEqual(copy);
+  });
+});
 
 describe("equalPaneSizes", () => {
   it("returns empty array for count <= 0", () => {

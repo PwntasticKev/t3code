@@ -1,12 +1,15 @@
 import {
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
 } from "react";
 import {
+  constrainPaneSizes,
   equalPaneSizes,
   MIN_TERMINAL_PANE_PX,
   paneBoundaryOffsets,
@@ -56,6 +59,9 @@ export function TerminalSplitPanes({
   renderTerminal,
 }: TerminalSplitPanesProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const containerPxRef = useRef(0);
+  const renderedContainerPxRef = useRef(0);
+  const [containerPx, setContainerPx] = useState(0);
   const latestSizesRef = useRef<number[]>([]);
   const pointerStateRef = useRef<PointerState | null>(null);
   const pendingRafRef = useRef<number | null>(null);
@@ -66,6 +72,29 @@ export function TerminalSplitPanes({
   }, [onSizesChange, onResizeEnd]);
 
   const resolved = resolvePaneSizes(sizes, terminalIds.length);
+  const resolvedRef = useRef(resolved);
+  resolvedRef.current = resolved;
+  const displayed = constrainPaneSizes(resolved, containerPx, MIN_TERMINAL_PANE_PX[direction]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      const nextContainerPx =
+        direction === "horizontal" ? entry.contentRect.width : entry.contentRect.height;
+      containerPxRef.current = nextContainerPx;
+      const currentSizes = resolvedRef.current;
+      const minimum = MIN_TERMINAL_PANE_PX[direction];
+      const previous = constrainPaneSizes(currentSizes, renderedContainerPxRef.current, minimum);
+      const next = constrainPaneSizes(currentSizes, nextContainerPx, minimum);
+      if (!sizesDiffer(previous, next)) return;
+      renderedContainerPxRef.current = nextContainerPx;
+      setContainerPx(nextContainerPx);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [direction, sizes, terminalIds.length]);
 
   const writeSizesToDom = useCallback(
     (nextSizes: readonly number[]) => {
@@ -139,7 +168,7 @@ export function TerminalSplitPanes({
   }, [flushPending, writeSizesToDom]);
 
   useLayoutEffect(() => {
-    const displayedSizes = pointerStateRef.current ? latestSizesRef.current : resolved;
+    const displayedSizes = pointerStateRef.current ? latestSizesRef.current : displayed;
     latestSizesRef.current = displayedSizes;
     writeSizesToDom(displayedSizes);
   });
@@ -182,6 +211,8 @@ export function TerminalSplitPanes({
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>, handleIndex: number) => {
     if (event.button !== 0 || pointerStateRef.current) return;
+    const dragContainerPx = containerPxRef.current;
+    if (dragContainerPx <= 0) return;
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
@@ -189,8 +220,6 @@ export function TerminalSplitPanes({
     }
     event.preventDefault();
     event.stopPropagation();
-    const bounds = containerRef.current?.getBoundingClientRect();
-    if (!bounds) return;
     pointerStateRef.current = {
       pointerId: event.pointerId,
       handleIndex,
@@ -200,21 +229,60 @@ export function TerminalSplitPanes({
       startClientY: event.clientY,
       pendingClientX: event.clientX,
       pendingClientY: event.clientY,
-      startSizes: resolved,
-      containerPx: direction === "horizontal" ? bounds.width : bounds.height,
+      startSizes: displayed,
+      containerPx: dragContainerPx,
     };
-    latestSizesRef.current = resolved;
+    latestSizesRef.current = displayed;
     event.currentTarget.dataset.dragging = "true";
     document.body.style.cursor = direction === "horizontal" ? "col-resize" : "row-resize";
     document.body.style.userSelect = "none";
   };
 
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>, handleIndex: number) => {
+    if (pointerStateRef.current) return;
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      callbacksRef.current.onSizesChange(equalPaneSizes(terminalIds.length));
+      callbacksRef.current.onResizeEnd();
+      return;
+    }
+
+    const step = event.shiftKey ? 96 : 24;
+    const deltaPx =
+      direction === "horizontal"
+        ? event.key === "ArrowLeft"
+          ? -step
+          : event.key === "ArrowRight"
+            ? step
+            : undefined
+        : event.key === "ArrowUp"
+          ? -step
+          : event.key === "ArrowDown"
+            ? step
+            : undefined;
+    if (deltaPx === undefined) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const next = resizeAdjacentPanes({
+      sizes: displayed,
+      handleIndex,
+      deltaPx,
+      containerPx: containerPxRef.current,
+      minPanePx: MIN_TERMINAL_PANE_PX[direction],
+    });
+    callbacksRef.current.onSizesChange(next);
+    callbacksRef.current.onResizeEnd();
+  };
+
   // Mid-drag re-renders are corrected by the layout effect, which re-applies latestSizesRef.
-  const offsets = paneBoundaryOffsets(resolved);
+  const offsets = paneBoundaryOffsets(displayed);
   const gridStyle =
     direction === "horizontal"
-      ? { gridTemplateColumns: paneGridTemplate(resolved) }
-      : { gridTemplateRows: paneGridTemplate(resolved) };
+      ? { gridTemplateColumns: paneGridTemplate(displayed) }
+      : { gridTemplateRows: paneGridTemplate(displayed) };
 
   return (
     <div
@@ -241,7 +309,7 @@ export function TerminalSplitPanes({
           ref={(element) => {
             handleStateRef.current[handleIndex] = element;
           }}
-          className={`group absolute z-20 select-none touch-none ${
+          className={`group absolute z-20 select-none touch-none outline-none ${
             direction === "horizontal"
               ? "bottom-0 top-0 w-2 -translate-x-1/2 cursor-col-resize"
               : "left-0 right-0 h-2 -translate-y-1/2 cursor-row-resize"
@@ -252,9 +320,14 @@ export function TerminalSplitPanes({
               : { top: `calc(${offset * 100}%)` }
           }
           role="separator"
+          tabIndex={0}
           aria-orientation={direction === "horizontal" ? "vertical" : "horizontal"}
           aria-label="Resize terminal panes"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(offset * 100)}
           onPointerDown={(event) => startDrag(event, handleIndex)}
+          onKeyDown={(event) => handleKeyDown(event, handleIndex)}
           onLostPointerCapture={(event) => {
             if (pointerStateRef.current?.pointerId === event.pointerId) finishDrag();
           }}
@@ -265,7 +338,7 @@ export function TerminalSplitPanes({
         >
           <span
             aria-hidden
-            className={`pointer-events-none absolute bg-transparent transition-colors duration-150 group-hover:bg-border group-data-[dragging]:bg-primary/60 ${
+            className={`pointer-events-none absolute bg-transparent transition-colors duration-150 group-hover:bg-border group-focus-visible:bg-primary/60 group-data-[dragging]:bg-primary/60 ${
               direction === "horizontal"
                 ? "inset-y-0 left-1/2 w-px -translate-x-1/2"
                 : "inset-x-0 top-1/2 h-px -translate-y-1/2"
