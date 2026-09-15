@@ -132,3 +132,38 @@ export function paneBoundaryOffsets(sizes: readonly number[]): number[] {
 
   return result;
 }
+
+/** Internal pane boundaries rounded to whole CSS pixels for the given container extent. */
+export function panePixelBoundaries(sizes: readonly number[], containerPx: number): number[] {
+  return paneBoundaryOffsets(sizes).map((offset) => Math.round(offset * containerPx));
+}
+
+/**
+ * Returns pane fractions whose internal boundaries land on whole CSS pixels. This keeps terminal
+ * canvases and their borders aligned while a split is dragged.
+ */
+export function snapPaneSizesToWholePixels(
+  sizes: readonly number[],
+  containerPx: number,
+): number[] {
+  if (containerPx <= 0 || sizes.length <= 1) return Array.from(sizes);
+
+  const boundaryCount = sizes.length - 1;
+  const boundaries = panePixelBoundaries(sizes, containerPx);
+  let previous = 0;
+
+  for (let index = 0; index < boundaries.length; index++) {
+    const upper = Math.ceil(containerPx) - (boundaryCount - index);
+    const boundary = boundaries[index] ?? previous + 1;
+    boundaries[index] = Math.max(previous + 1, Math.min(boundary, upper));
+    previous = boundaries[index]!;
+  }
+
+  const result = boundaries.map((boundary, index) => {
+    const previousBoundary = boundaries[index - 1] ?? 0;
+    return (boundary - previousBoundary) / containerPx;
+  });
+  const allocated = result.reduce((total, size) => total + size, 0);
+  result.push(1 - allocated);
+  return result;
+}

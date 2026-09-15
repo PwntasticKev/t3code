@@ -5,8 +5,10 @@ import {
   equalPaneSizes,
   paneBoundaryOffsets,
   paneGridTemplate,
+  panePixelBoundaries,
   resizeAdjacentPanes,
   resolvePaneSizes,
+  snapPaneSizesToWholePixels,
 } from "./splitPaneSizes";
 
 describe("constrainPaneSizes", () => {
@@ -355,6 +357,60 @@ describe("paneBoundaryOffsets", () => {
     const offsets = paneBoundaryOffsets(sizes);
     for (let i = 1; i < offsets.length; i++) {
       expect(offsets[i]!).toBeGreaterThan(offsets[i - 1]!);
+    }
+  });
+});
+
+describe("snapPaneSizesToWholePixels", () => {
+  it("snaps boundaries to increasing whole pixels and preserves the total", () => {
+    const result = snapPaneSizesToWholePixels([0.333333, 0.333333, 0.333334], 101);
+    const boundaries = panePixelBoundaries(result, 101);
+
+    expect(boundaries).toEqual([34, 67]);
+    expect(boundaries.every(Number.isInteger)).toBe(true);
+    expect(boundaries[1]!).toBeGreaterThan(boundaries[0]!);
+    expect(result.reduce((total, size) => total + size, 0)).toBe(1);
+  });
+
+  it("returns a copy unchanged when containerPx <= 0", () => {
+    const sizes = [0.25, 0.75];
+    const result = snapPaneSizesToWholePixels(sizes, 0);
+    expect(result).toEqual(sizes);
+    expect(result).not.toBe(sizes);
+  });
+
+  it("returns a copy unchanged for a single pane", () => {
+    const sizes = [1];
+    const result = snapPaneSizesToWholePixels(sizes, 100);
+    expect(result).toEqual(sizes);
+    expect(result).not.toBe(sizes);
+  });
+
+  it("does not mutate the input", () => {
+    const sizes = [0.333333, 0.333333, 0.333334];
+    const copy = [...sizes];
+    snapPaneSizesToWholePixels(sizes, 101);
+    expect(sizes).toEqual(copy);
+  });
+
+  it("clamps boundaries within the valid pixel range", () => {
+    const result = snapPaneSizesToWholePixels([0.001, 0.001, 0.998], 100);
+    expect(panePixelBoundaries(result, 100)).toEqual([1, 2]);
+
+    const endClamped = snapPaneSizesToWholePixels([0.998, 0.001, 0.001], 100);
+    expect(panePixelBoundaries(endClamped, 100)).toEqual([98, 99]);
+  });
+});
+
+describe("panePixelBoundaries", () => {
+  it("returns increasing whole-pixel internal boundaries in range", () => {
+    const boundaries = panePixelBoundaries([0.25, 0.25, 0.5], 101);
+    expect(boundaries).toHaveLength(2);
+    expect(boundaries.every(Number.isInteger)).toBe(true);
+    expect(boundaries[1]!).toBeGreaterThan(boundaries[0]!);
+    for (const boundary of boundaries) {
+      expect(boundary).toBeGreaterThanOrEqual(1);
+      expect(boundary).toBeLessThanOrEqual(100);
     }
   });
 });

@@ -14,8 +14,10 @@ import {
   MIN_TERMINAL_PANE_PX,
   paneBoundaryOffsets,
   paneGridTemplate,
+  panePixelBoundaries,
   resizeAdjacentPanes,
   resolvePaneSizes,
+  snapPaneSizesToWholePixels,
   type TerminalSplitDirection,
 } from "~/terminal/splitPaneSizes";
 
@@ -83,17 +85,28 @@ export function TerminalSplitPanes({
   }, [direction, sizes, terminalIds.length]);
 
   const writeSizesToDom = useCallback(
-    (nextSizes: readonly number[]) => {
+    (nextSizes: readonly number[], extentPx?: number) => {
       const container = containerRef.current;
       if (!container) return;
-      const template = paneGridTemplate(nextSizes);
       const horizontal = direction === "horizontal";
+      const boundaries = extentPx && extentPx > 0 ? panePixelBoundaries(nextSizes, extentPx) : null;
+      // Terminal canvases paint on whole CSS pixels; fractional tracks make text and borders drift.
+      const template = boundaries
+        ? [
+            ...boundaries.map((boundary, index) => {
+              const previousBoundary = boundaries[index - 1] ?? 0;
+              return `${boundary - previousBoundary}px`;
+            }),
+            "minmax(0, 1fr)",
+          ].join(" ")
+        : paneGridTemplate(nextSizes);
       container.style.gridTemplateColumns = horizontal ? template : "";
       container.style.gridTemplateRows = horizontal ? "" : template;
-      for (const [index, offset] of paneBoundaryOffsets(nextSizes).entries()) {
+      const positions = boundaries ?? paneBoundaryOffsets(nextSizes).map((offset) => offset * 100);
+      for (const [index, positionValue] of positions.entries()) {
         const handle = handleStateRef.current[index];
         if (!handle) continue;
-        const position = `calc(${offset * 100}%)`;
+        const position = boundaries ? `${positionValue}px` : `calc(${positionValue}%)`;
         handle.style.left = horizontal ? position : "";
         handle.style.top = horizontal ? "" : position;
       }
@@ -127,9 +140,10 @@ export function TerminalSplitPanes({
             containerPx: dragContainerPx,
             minPanePx: MIN_TERMINAL_PANE_PX[direction],
           });
-          writeSizesToDom(next);
-          latestSizesRef.current = next;
-          return paneBoundaryOffsets(next)[handleIndex]! * dragContainerPx;
+          const snapped = snapPaneSizesToWholePixels(next, dragContainerPx);
+          writeSizesToDom(snapped, dragContainerPx);
+          latestSizesRef.current = snapped;
+          return panePixelBoundaries(snapped, dragContainerPx)[handleIndex]!;
         },
         finish(_value, moved) {
           const changed = sizesDiffer(startSizes, latestSizesRef.current);
@@ -153,9 +167,12 @@ export function TerminalSplitPanes({
 
   useLayoutEffect(() => {
     resolvedRef.current = resolved;
-    const displayedSizes = draggingRef.current ? latestSizesRef.current : displayed;
-    latestSizesRef.current = displayedSizes;
-    writeSizesToDom(displayedSizes);
+    if (draggingRef.current) {
+      writeSizesToDom(latestSizesRef.current, containerPxRef.current);
+      return;
+    }
+    latestSizesRef.current = displayed;
+    writeSizesToDom(displayed);
   });
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>, handleIndex: number) => {
@@ -193,7 +210,8 @@ export function TerminalSplitPanes({
       containerPx: containerPxRef.current,
       minPanePx: MIN_TERMINAL_PANE_PX[direction],
     });
-    callbacksRef.current.onSizesChange(next);
+    const snapped = snapPaneSizesToWholePixels(next, containerPxRef.current);
+    callbacksRef.current.onSizesChange(snapped);
     callbacksRef.current.onResizeEnd();
   };
 

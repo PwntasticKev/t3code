@@ -590,6 +590,9 @@ export class GhosttyTerminalSurface {
   private scrollbarPointerOffset = 0;
   private disposed = false;
   private resizeNotifyTimer: number | null = null;
+  private pendingReflowTimer: number | null = null;
+  private pendingReflowDims: { cols: number; rows: number } | null = null;
+  private lastResizeDims: { cols: number; rows: number } | null = null;
   private originY = CONTENT_PADDING;
   private mountHeight = 0;
   private selectionEnd: { x: number; y: number } | null = null;
@@ -764,7 +767,9 @@ export class GhosttyTerminalSurface {
 
   write(data: string): void {
     if (this.disposed) return;
+    // Shell prompt output assumes the pre-resize layout; parse it before reflowing.
     this.core.write(data);
+    this.applyPendingReflow();
     this.synchronizeMouseTrackingState();
     // Restart the blink cycle from the visible phase so the cursor never sits
     // invisible through a stream of output or a burst of typing echo.
@@ -776,7 +781,9 @@ export class GhosttyTerminalSurface {
   resetAndWrite(data: string): void {
     if (this.disposed) return;
     this.lastMouseMotionData = "";
+    // Replayed prompt output also needs the pre-resize grid before its final reflow.
     this.core.resetAndWrite(data);
+    this.applyPendingReflow();
     this.synchronizeMouseTrackingState();
     // A replayed session starts from the visible phase like any other write:
     // reattaching mid-blink must not open on an invisible cursor.
@@ -894,7 +901,14 @@ export class GhosttyTerminalSurface {
     // During split-pane drag, defer grid reflow to avoid wrapped text jumping every frame.
     // Keep canvas-sized repaint; reflow happens once when drag ends via setReflowDeferred(false).
     if (grid.cols !== this.cols || grid.rows !== this.rows || !this.resizeNotified) {
-      const shouldSkipReflow = this.reflowDeferred && this.resizeNotified;
+      const reflowPending = this.pendingReflowDims !== null;
+      const shouldSkipReflow = (this.reflowDeferred || reflowPending) && this.resizeNotified;
+      if (reflowPending && this.resizeNotified) {
+        // A refit while the shell redraws for the released size must not reflow early; it
+        // only retargets the pending reflow and tells the shell about any newer size.
+        this.pendingReflowDims = grid;
+        this.notifyResizeNow(grid.cols, grid.rows);
+      }
       if (!shouldSkipReflow) {
         this.cols = grid.cols;
         this.rows = grid.rows;
@@ -920,23 +934,68 @@ export class GhosttyTerminalSurface {
   setReflowDeferred(deferred: boolean): void {
     if (this.disposed || deferred === this.reflowDeferred) return;
     this.reflowDeferred = deferred;
-    if (!deferred) {
-      // Reflow to settled size now that drag has ended
-      this.fit();
+    if (deferred) {
+      this.clearPendingReflow();
+      return;
     }
+    const target = terminalGridSize(
+      this.mount.clientWidth,
+      this.mount.clientHeight,
+      this.metrics,
+      CONTENT_PADDING,
+    );
+    if ((target.cols === this.cols && target.rows === this.rows) || !this.resizeNotified) {
+      this.fit();
+      return;
+    }
+    if (this.resizeNotifyTimer !== null) window.clearTimeout(this.resizeNotifyTimer);
+    this.resizeNotifyTimer = null;
+    this.notifyResizeNow(target.cols, target.rows);
+    // Shells redraw the prompt assuming the pre-resize layout, so reflow waits for output.
+    this.pendingReflowDims = target;
+    this.pendingReflowTimer = window.setTimeout(() => this.applyPendingReflow(), 250);
+  }
+
+  private clearPendingReflow(): void {
+    if (this.pendingReflowTimer !== null) window.clearTimeout(this.pendingReflowTimer);
+    this.pendingReflowTimer = null;
+    this.pendingReflowDims = null;
+  }
+
+  private applyPendingReflow(): void {
+    const target = this.pendingReflowDims;
+    if (target === null) return;
+    this.clearPendingReflow();
+    if (target.cols === this.cols && target.rows === this.rows) return;
+    this.cols = target.cols;
+    this.rows = target.rows;
+    this.core.resize(target.cols, target.rows, this.metrics.width, this.metrics.height);
+    this.forceFullRender = true;
+    this.scrollbarDirty = true;
+    this.requestRender();
+  }
+
+  private notifyResizeNow(cols: number, rows: number): void {
+    if (
+      this.disposed ||
+      (this.lastResizeDims?.cols === cols && this.lastResizeDims.rows === rows)
+    ) {
+      return;
+    }
+    this.options.onResize(cols, rows);
+    this.lastResizeDims = { cols, rows };
   }
 
   /**
-   * The local grid reflows immediately, but the PTY only hears about settled
-   * dimensions: notifying on every drag step makes the shell reprint its
-   * prompt mid-drag, which reads as jitter.
+   * Outside deferred reflow, the PTY only hears about settled dimensions:
+   * notifying on every drag step makes the shell reprint its prompt mid-drag.
    */
   private notifyResize(): void {
     this.resizeNotified = true;
     if (this.resizeNotifyTimer !== null) window.clearTimeout(this.resizeNotifyTimer);
     this.resizeNotifyTimer = window.setTimeout(() => {
       this.resizeNotifyTimer = null;
-      if (!this.disposed) this.options.onResize(this.cols, this.rows);
+      this.notifyResizeNow(this.cols, this.rows);
     }, 150);
   }
 
@@ -1048,12 +1107,16 @@ export class GhosttyTerminalSurface {
     this.dprMedia = null;
     this.reducedMotionMedia?.removeEventListener("change", this.onReducedMotionChange);
     if (this.selectionScrollTimer !== null) window.clearInterval(this.selectionScrollTimer);
+    this.clearPendingReflow();
     if (this.resizeNotifyTimer !== null) {
       window.clearTimeout(this.resizeNotifyTimer);
       this.resizeNotifyTimer = null;
       // Flush the settled dimensions so the PTY keeps the final size even when
       // the surface unmounts inside the debounce window.
-      this.options.onResize(this.cols, this.rows);
+      if (this.lastResizeDims?.cols !== this.cols || this.lastResizeDims.rows !== this.rows) {
+        this.options.onResize(this.cols, this.rows);
+        this.lastResizeDims = { cols: this.cols, rows: this.rows };
+      }
     }
     this.cancelRender();
     if (this.compositionSuppressionTimer !== null) {
