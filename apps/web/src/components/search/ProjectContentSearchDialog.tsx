@@ -61,11 +61,13 @@ function EmptyContentSearchDialog() {
       footerActionLabel="Open file"
       inputProps={{ disabled: true, placeholder: "Search project contents…" }}
       mode="none"
-      panelClassName="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground"
+      panelClassName="flex min-h-0 flex-1 items-center justify-center"
       testId="project-content-search"
       value=""
     >
-      Open a project to search its files.
+      <p className="px-6 text-center text-muted-foreground text-sm">
+        Open a project to search its files.
+      </p>
     </CommandPaletteContent>
   );
 }
@@ -198,7 +200,7 @@ function OpenContentSearchDialog(props: {
         <div className="flex h-9 shrink-0 items-center border-b px-3 text-xs text-muted-foreground">
           {search.isPending ? (
             <span className="flex items-center gap-2">
-              <Spinner className="size-3.5" /> Searching…
+              <Spinner size="sm" /> Searching…
             </span>
           ) : search.error ? (
             <span className="text-destructive">{search.error}</span>

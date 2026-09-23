@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { Toggle } from "../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { cn } from "~/lib/utils";
 
 export function SearchOptionButton(props: {
   readonly active: boolean;
@@ -17,17 +16,14 @@ export function SearchOptionButton(props: {
           <Toggle
             aria-label={props.label}
             pressed={props.active}
-            className={cn(
-              "size-8 rounded-[5px] font-mono text-muted-foreground data-pressed:text-foreground sm:size-7",
-              props.className,
-            )}
-            size="compact"
-            variant="ghost"
+            className={props.className}
+            size="segmented"
+            variant="segmented"
             onClick={props.onClick}
           />
         }
       >
-        {props.children}
+        <span className="font-mono">{props.children}</span>
       </TooltipTrigger>
       <TooltipPopup side="top">{props.label}</TooltipPopup>
     </Tooltip>

@@ -88,7 +88,7 @@ export function TerminalSearchBar(props: TerminalSearchBarProps) {
         <SearchOptionButton
           active={props.caseSensitive}
           label="Match case"
-          className="size-auto h-5 w-6 rounded-none text-[11px] sm:size-auto sm:h-5 sm:w-6 sm:text-[11px] min-w-0"
+          className="h-5 w-6 min-w-0 rounded-none px-0 text-[11px]"
           onClick={() => props.onCaseSensitiveChange(!props.caseSensitive)}
         >
           Aa
